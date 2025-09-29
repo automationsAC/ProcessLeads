@@ -68,10 +68,6 @@ PRIORITY_API_URL = "https://your-app-domain/functions/getCurrentPriorities"
 python zerobounce_validator.py
 ```
 
-### Merge Instantly Leads
-```bash
-python merge_instantly_leads.py
-```
 
 ## Database Schema
 
