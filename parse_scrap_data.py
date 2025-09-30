@@ -30,35 +30,33 @@ class ScrapDataParser:
         """Fetch leads that need scrap_data parsing"""
         logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'}, start_id: {start_id})...")
         
-        # Use a very light query - just select by ID range, minimal fields
-        # Fetch only the fields we absolutely need
-        query = self.supabase.table('contacts_grid_view').select('id, scrap_data')
+        # Use a light query - select by ID with minimal fields
+        query = self.supabase.table('contacts_grid_view').select('id, scrap_data, parsing_completed')
         
-        # Start from specific ID if provided, otherwise start from beginning
+        # Start from specific ID if provided
         if start_id:
             query = query.gte('id', start_id)
         
-        # Optional country filter ONLY if specified (adds complexity)
+        # Optional country filter
         if country:
             query = query.eq('country', country)
         
-        # Order by ID and limit to reasonable batch
+        # Order by ID and limit
         query = query.order('id', desc=False)
-        query = query.limit(batch_size * 3)  # Fetch 3x to account for already parsed
+        query = query.limit(batch_size * 5)  # Fetch 5x to account for already parsed
         
         try:
             result = query.execute()
             all_leads = result.data
             
             # Filter client-side for unparsed records with scrap_data
-            # We can't check parsing_completed in query due to timeout, so we'll process and update
-            # If already parsed, the update will just set the same value
             leads = [
                 lead for lead in all_leads
-                if lead.get('scrap_data')  # Has scrap_data (not null)
+                if lead.get('scrap_data')  # Has scrap_data
+                and lead.get('parsing_completed') == False  # Explicitly false, not null
             ][:batch_size]
             
-            logger.info(f"Fetched {len(leads)} leads with scrap_data (from {len(all_leads)} total)")
+            logger.info(f"Fetched {len(leads)} unparsed leads (from {len(all_leads)} total)")
             return leads
         except Exception as e:
             logger.error(f"Failed to fetch leads: {e}")
