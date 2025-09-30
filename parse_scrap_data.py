@@ -30,33 +30,35 @@ class ScrapDataParser:
         """Fetch leads that need scrap_data parsing"""
         logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'}, start_id: {start_id})...")
         
-        # Simple query to avoid timeout - fetch by ID range and filter client-side
-        query = self.supabase.table('contacts_grid_view').select('id, scrap_data, country, parsing_completed')
+        # Use a very light query - just select by ID range, minimal fields
+        # Fetch only the fields we absolutely need
+        query = self.supabase.table('contacts_grid_view').select('id, scrap_data')
         
-        # Start from specific ID if provided
+        # Start from specific ID if provided, otherwise start from beginning
         if start_id:
             query = query.gte('id', start_id)
         
-        # Optional country filter (safe, indexed)
+        # Optional country filter ONLY if specified (adds complexity)
         if country:
             query = query.eq('country', country)
         
-        # Order by ID and fetch more than needed
+        # Order by ID and limit to reasonable batch
         query = query.order('id', desc=False)
-        query = query.limit(batch_size * 10)  # Fetch more to compensate for filtering
+        query = query.limit(batch_size * 3)  # Fetch 3x to account for already parsed
         
         try:
             result = query.execute()
             all_leads = result.data
             
             # Filter client-side for unparsed records with scrap_data
+            # We can't check parsing_completed in query due to timeout, so we'll process and update
+            # If already parsed, the update will just set the same value
             leads = [
                 lead for lead in all_leads
-                if lead.get('scrap_data')  # Has scrap_data
-                and not lead.get('parsing_completed')  # Not yet parsed (null or false)
+                if lead.get('scrap_data')  # Has scrap_data (not null)
             ][:batch_size]
             
-            logger.info(f"Fetched {len(leads)} unparsed leads (from {len(all_leads)} total)")
+            logger.info(f"Fetched {len(leads)} leads with scrap_data (from {len(all_leads)} total)")
             return leads
         except Exception as e:
             logger.error(f"Failed to fetch leads: {e}")
@@ -251,9 +253,18 @@ def main():
         # Initialize parser
         parser = ScrapDataParser(supabase)
         
-        # Process batch (default 100 leads)
-        # You can specify country: result = parser.process_batch(batch_size=100, country='es')
-        result = parser.process_batch(batch_size=100)
+        # Get the last processed ID to continue from there
+        # This avoids reprocessing and handles the timeout issue
+        try:
+            last_parsed = supabase.table('contacts_grid_view').select('id').eq('parsing_completed', True).order('id', desc=True).limit(1).execute()
+            start_id = last_parsed.data[0]['id'] + 1 if last_parsed.data else 1
+            logger.info(f"Continuing from ID: {start_id}")
+        except:
+            start_id = 1
+            logger.info(f"Starting from beginning (ID: {start_id})")
+        
+        # Process batch starting from last processed
+        result = parser.process_batch(batch_size=100, start_id=start_id)
         
         if "error" in result:
             logger.error(f"Batch processing failed: {result['error']}")
