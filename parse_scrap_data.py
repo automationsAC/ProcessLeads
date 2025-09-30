@@ -26,37 +26,30 @@ class ScrapDataParser:
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
     
-    def fetch_unparsed_batch(self, batch_size: int = 100, country: Optional[str] = None, start_id: int = None) -> List[Dict]:
+    def fetch_unparsed_batch(self, batch_size: int = 1000, country: Optional[str] = None) -> List[Dict]:
         """Fetch leads that need scrap_data parsing"""
-        logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'}, start_id: {start_id})...")
+        logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'})...")
         
-        # Use a light query - select by ID with minimal fields
-        query = self.supabase.table('contacts_grid_view').select('id, scrap_data, parsing_completed')
+        # Simple query using indexed fields - should be fast with the index
+        query = self.supabase.table('contacts_grid_view').select('id, scrap_data')
         
-        # Start from specific ID if provided
-        if start_id:
-            query = query.gte('id', start_id)
+        # Filter for unparsed records - index makes this fast
+        query = query.eq('parsing_completed', False)
+        query = query.not_.is_('scrap_data', 'null')
         
         # Optional country filter
         if country:
             query = query.eq('country', country)
         
-        # Order by ID and limit
+        # Order by ID for consistent processing
         query = query.order('id', desc=False)
-        query = query.limit(batch_size * 5)  # Fetch 5x to account for already parsed
+        query = query.limit(batch_size)
         
         try:
             result = query.execute()
-            all_leads = result.data
+            leads = result.data
             
-            # Filter client-side for unparsed records with scrap_data
-            leads = [
-                lead for lead in all_leads
-                if lead.get('scrap_data')  # Has scrap_data
-                and lead.get('parsing_completed') == False  # Explicitly false, not null
-            ][:batch_size]
-            
-            logger.info(f"Fetched {len(leads)} unparsed leads (from {len(all_leads)} total)")
+            logger.info(f"Fetched {len(leads)} unparsed leads")
             return leads
         except Exception as e:
             logger.error(f"Failed to fetch leads: {e}")
@@ -151,7 +144,7 @@ class ScrapDataParser:
             logger.error(f"Lead {lead_id}: Failed to update - {e}")
             return False
     
-    def process_batch(self, batch_size: int = 100, country: Optional[str] = None, start_id: int = None) -> Dict:
+    def process_batch(self, batch_size: int = 1000, country: Optional[str] = None) -> Dict:
         """Process a batch of leads"""
         start_time = datetime.now()
         
@@ -160,7 +153,7 @@ class ScrapDataParser:
         logger.info(f"Start time: {start_time.isoformat()}")
         
         # Fetch unparsed leads
-        leads = self.fetch_unparsed_batch(batch_size, country, start_id)
+        leads = self.fetch_unparsed_batch(batch_size, country)
         
         if not leads:
             logger.warning("No unparsed leads found")
@@ -251,18 +244,9 @@ def main():
         # Initialize parser
         parser = ScrapDataParser(supabase)
         
-        # Get the last processed ID to continue from there
-        # This avoids reprocessing and handles the timeout issue
-        try:
-            last_parsed = supabase.table('contacts_grid_view').select('id').eq('parsing_completed', True).order('id', desc=True).limit(1).execute()
-            start_id = last_parsed.data[0]['id'] + 1 if last_parsed.data else 1
-            logger.info(f"Continuing from ID: {start_id}")
-        except:
-            start_id = 1
-            logger.info(f"Starting from beginning (ID: {start_id})")
-        
-        # Process batch starting from last processed
-        result = parser.process_batch(batch_size=100, start_id=start_id)
+        # Process batch - with index, can query directly by parsing_completed = FALSE
+        # No need for ID tracking anymore!
+        result = parser.process_batch(batch_size=1000)
         
         if "error" in result:
             logger.error(f"Batch processing failed: {result['error']}")

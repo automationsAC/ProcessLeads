@@ -11,9 +11,10 @@ ADD COLUMN IF NOT EXISTS parsing_completed boolean DEFAULT false,
 ADD COLUMN IF NOT EXISTS parsing_processed_at timestamp with time zone;
 
 -- Add indexes for better query performance
-CREATE INDEX IF NOT EXISTS idx_contacts_parsing_completed 
-ON public.contacts_grid_view(parsing_completed) 
-WHERE parsing_completed IS NOT TRUE;
+-- Partial index for fast queries on unparsed records
+CREATE INDEX IF NOT EXISTS idx_contacts_parsing_incomplete 
+ON public.contacts_grid_view(id) 
+WHERE parsing_completed = FALSE AND scrap_data IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_contacts_parsed_location 
 ON public.contacts_grid_view(parsed_latitude, parsed_longitude) 
