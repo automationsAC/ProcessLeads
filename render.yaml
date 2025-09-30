@@ -1,0 +1,60 @@
+# Render Blueprint for Lead Processing Pipeline
+# This file can be used for Infrastructure as Code deployment
+
+services:
+  # Cron Job 1: ZeroBounce Email Validator
+  - type: cronjob
+    name: zerobounce-validator
+    runtime: python
+    plan: starter
+    branch: main
+    schedule: "*/30 * * * *"  # Every 30 minutes
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 zerobounce_validator.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: ZEROBOUNCE_API_KEY
+        sync: false
+      - key: PRIORITY_API_KEY
+        sync: false
+      - key: PRIORITY_API_URL
+        sync: false
+
+  # Cron Job 2: HubSpot Duplicate Checker
+  - type: cronjob
+    name: hubspot-duplicate-checker
+    runtime: python
+    plan: starter
+    branch: main
+    schedule: "15,45 * * * *"  # At :15 and :45 past each hour
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 hubspot_duplicate_checker.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: HUBSPOT_TOKEN
+        sync: false
+      - key: AIRTABLE_TOKEN
+        sync: false
+      - key: AIRTABLE_BASE
+        sync: false
+
+  # Cron Job 3: Scrap Data Parser
+  - type: cronjob
+    name: scrap-data-parser
+    runtime: python
+    plan: starter
+    branch: main
+    schedule: "0 */6 * * *"  # Every 6 hours
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 parse_scrap_data.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
