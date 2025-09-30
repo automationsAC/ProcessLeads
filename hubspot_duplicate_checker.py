@@ -230,7 +230,7 @@ class HubSpotDuplicateChecker:
         logger.info(f"Fetching {batch_size} leads for HubSpot duplicate checking (start_id: {start_id})...")
         
         # Use direct SQL via RPC or a simpler approach - fetch by ID and filter client-side
-        query = self.supabase.table('contacts_grid_view').select('id, email, phone, first_name, last_name, company, property_name, address_city_from_lead, country, zerobounce_status, hubspot_duplicate_check_2')
+        query = self.supabase.table('contacts_grid_view').select('id, email, phone, first_name, last_name, company, property_name, address_city_from_lead, country, zerobounce_status, zerobounce_processed, hubspot_check_2_completed')
         
         # Only filter by ID range if provided
         if start_id:
@@ -244,11 +244,15 @@ class HubSpotDuplicateChecker:
             result = query.execute()
             all_leads = result.data
             
-            # Filter in Python for leads that match our criteria
+            # Filter in Python for leads that match our criteria:
+            # - ZeroBounce validated and marked as processed (zerobounce_processed = True)
+            # - HubSpot 2nd check not yet completed (hubspot_check_2_completed is null or false)
+            # - Has valid email status
             leads = [
                 lead for lead in all_leads 
                 if lead.get('zerobounce_status') == 'valid' 
-                and lead.get('hubspot_duplicate_check_2') is None
+                and lead.get('zerobounce_processed') == True
+                and not lead.get('hubspot_check_2_completed')
                 and lead.get('email')
             ][:batch_size]
             
@@ -434,7 +438,8 @@ class HubSpotDuplicateChecker:
             'hubspot_duplicate_check_2': status,
             'hubspot_checked_at_2': datetime.now().isoformat(),
             'needs_hubspot_deal': needs_deal,
-            'deal_creation_reason': reason
+            'deal_creation_reason': reason,
+            'hubspot_check_2_completed': True  # Mark 2nd HubSpot check as complete
         }
         
         # Add contact details if found
@@ -470,25 +475,40 @@ class HubSpotDuplicateChecker:
     
     def process_batch(self, batch_size: int = 100, start_id: int = None) -> Dict:
         """Process a batch of leads for HubSpot duplicate checking"""
+        from datetime import datetime
+        start_time = datetime.now()
+        
+        logger.info(f"=" * 80)
         logger.info(f"Starting HubSpot duplicate check batch (size: {batch_size}, start_id: {start_id})")
+        logger.info(f"Start time: {start_time.isoformat()}")
         
         # Fetch leads
         leads = self.fetch_leads_batch(batch_size, start_id)
         if not leads:
-            return {"error": "No leads found to process"}
+            logger.warning("No leads found to process - all leads may already be checked")
+            return {"error": "No leads found to process", "leads_processed": 0, "updated_count": 0, "errors": 0}
         
         updated_count = 0
         errors = 0
+        stats = {'unique': 0, 'duplicate': 0, 'contact_duplicate': 0, 'deal_exists': 0, 'new_lead': 0}
         
         for lead in leads:
             try:
                 update_data = self.process_lead(lead)
                 
+                # Track stats
+                status = update_data.get('hubspot_duplicate_check_2')
+                reason = update_data.get('deal_creation_reason')
+                if status:
+                    stats[status] = stats.get(status, 0) + 1
+                if reason:
+                    stats[reason] = stats.get(reason, 0) + 1
+                
                 # Update Supabase
                 result = self.supabase.table('contacts_grid_view').update(update_data).eq('id', lead['id']).execute()
                 if result.data:
                     updated_count += 1
-                    logger.info(f"Updated lead {lead['id']}: {update_data['hubspot_duplicate_check_2']}")
+                    logger.info(f"Updated lead {lead['id']}: {status} ({reason})")
                 
                 # Rate limiting
                 time.sleep(0.1)
@@ -497,10 +517,27 @@ class HubSpotDuplicateChecker:
                 errors += 1
                 logger.error(f"Error processing lead {lead.get('id')}: {e}")
         
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        
+        logger.info(f"=" * 80)
+        logger.info(f"Batch processing completed")
+        logger.info(f"End time: {end_time.isoformat()}")
+        logger.info(f"Duration: {duration:.2f} seconds")
+        logger.info(f"Leads processed: {len(leads)}")
+        logger.info(f"Successfully updated: {updated_count}")
+        logger.info(f"Errors: {errors}")
+        logger.info(f"Stats: {stats}")
+        logger.info(f"=" * 80)
+        
         return {
             "leads_processed": len(leads),
             "updated_count": updated_count,
-            "errors": errors
+            "errors": errors,
+            "stats": stats,
+            "duration_seconds": duration,
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat()
         }
 
 def main():
