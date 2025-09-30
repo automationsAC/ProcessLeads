@@ -233,8 +233,17 @@ class ScrapDataParser:
 def main():
     """Main function to run scrap_data parsing"""
     try:
-        # Import config
-        from config import SUPABASE_URL, SUPABASE_ANON_KEY
+        # Import config - try local file first, then environment variables
+        import os
+        try:
+            from config import SUPABASE_URL, SUPABASE_ANON_KEY
+        except ImportError:
+            # Running on Render - use environment variables
+            SUPABASE_URL = os.environ.get('SUPABASE_URL')
+            SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY')
+            
+            if not all([SUPABASE_URL, SUPABASE_ANON_KEY]):
+                raise ValueError("Missing required environment variables: SUPABASE_URL, SUPABASE_ANON_KEY")
         
         # Initialize Supabase
         supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)

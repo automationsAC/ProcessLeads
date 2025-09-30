@@ -293,18 +293,27 @@ class ZeroBounceValidator:
 def main():
     """Main function to run ZeroBounce validation"""
     try:
-        # Import config
-        from config import SUPABASE_URL, SUPABASE_ANON_KEY
+        # Import config - try local file first, then environment variables
+        import os
+        try:
+            from config import SUPABASE_URL, SUPABASE_ANON_KEY, ZEROBOUNCE_API_KEY, PRIORITY_API_KEY
+        except ImportError:
+            # Running on Render - use environment variables
+            SUPABASE_URL = os.environ.get('SUPABASE_URL')
+            SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY')
+            ZEROBOUNCE_API_KEY = os.environ.get('ZEROBOUNCE_API_KEY')
+            PRIORITY_API_KEY = os.environ.get('PRIORITY_API_KEY')
+            
+            if not all([SUPABASE_URL, SUPABASE_ANON_KEY, ZEROBOUNCE_API_KEY]):
+                raise ValueError("Missing required environment variables: SUPABASE_URL, SUPABASE_ANON_KEY, ZEROBOUNCE_API_KEY")
         
         # Initialize Supabase
         supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
         
         # Initialize ZeroBounce validator
-        zerobounce_api_key = "fb7947fc42504dc19272dc5789e5c6ca"
-        validator = ZeroBounceValidator(zerobounce_api_key, supabase)
+        validator = ZeroBounceValidator(ZEROBOUNCE_API_KEY, supabase)
         
         # Get priority configuration
-        from config import PRIORITY_API_KEY
         priority_config = validator.get_priority_config(PRIORITY_API_KEY)
         logger.info(f"Priority config: {priority_config}")
         
@@ -313,11 +322,14 @@ def main():
         
         if "error" in result:
             logger.error(f"Batch processing failed: {result['error']}")
+            exit(1)
         else:
             logger.info(f"Batch processing completed: {result}")
+            exit(0)
             
     except Exception as e:
         logger.error(f"Main execution failed: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     main()
