@@ -26,29 +26,37 @@ class ScrapDataParser:
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
     
-    def fetch_unparsed_batch(self, batch_size: int = 100, country: Optional[str] = None) -> List[Dict]:
+    def fetch_unparsed_batch(self, batch_size: int = 100, country: Optional[str] = None, start_id: int = None) -> List[Dict]:
         """Fetch leads that need scrap_data parsing"""
-        logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'})...")
+        logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'}, start_id: {start_id})...")
         
-        # Build query
-        query = self.supabase.table('contacts_grid_view').select('id, scrap_data, country')
+        # Simple query to avoid timeout - fetch by ID range and filter client-side
+        query = self.supabase.table('contacts_grid_view').select('id, scrap_data, country, parsing_completed')
         
-        # Filter for unparsed records
-        query = query.is_('parsing_completed', 'null').or_('parsing_completed.eq.false')
-        query = query.not_.is_('scrap_data', 'null')
+        # Start from specific ID if provided
+        if start_id:
+            query = query.gte('id', start_id)
         
-        # Optional country filter
+        # Optional country filter (safe, indexed)
         if country:
             query = query.eq('country', country)
         
-        # Order by ID for consistent batching
+        # Order by ID and fetch more than needed
         query = query.order('id', desc=False)
-        query = query.limit(batch_size)
+        query = query.limit(batch_size * 10)  # Fetch more to compensate for filtering
         
         try:
             result = query.execute()
-            leads = result.data
-            logger.info(f"Fetched {len(leads)} unparsed leads")
+            all_leads = result.data
+            
+            # Filter client-side for unparsed records with scrap_data
+            leads = [
+                lead for lead in all_leads
+                if lead.get('scrap_data')  # Has scrap_data
+                and not lead.get('parsing_completed')  # Not yet parsed (null or false)
+            ][:batch_size]
+            
+            logger.info(f"Fetched {len(leads)} unparsed leads (from {len(all_leads)} total)")
             return leads
         except Exception as e:
             logger.error(f"Failed to fetch leads: {e}")
@@ -143,7 +151,7 @@ class ScrapDataParser:
             logger.error(f"Lead {lead_id}: Failed to update - {e}")
             return False
     
-    def process_batch(self, batch_size: int = 100, country: Optional[str] = None) -> Dict:
+    def process_batch(self, batch_size: int = 100, country: Optional[str] = None, start_id: int = None) -> Dict:
         """Process a batch of leads"""
         start_time = datetime.now()
         
@@ -152,7 +160,7 @@ class ScrapDataParser:
         logger.info(f"Start time: {start_time.isoformat()}")
         
         # Fetch unparsed leads
-        leads = self.fetch_unparsed_batch(batch_size, country)
+        leads = self.fetch_unparsed_batch(batch_size, country, start_id)
         
         if not leads:
             logger.warning("No unparsed leads found")
