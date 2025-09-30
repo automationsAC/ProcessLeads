@@ -26,11 +26,11 @@ class ScrapDataParser:
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
     
-    def fetch_unparsed_batch(self, batch_size: int = 1000, country: Optional[str] = None) -> List[Dict]:
+    def fetch_unparsed_batch(self, batch_size: int = 100, country: Optional[str] = None) -> List[Dict]:
         """Fetch leads that need scrap_data parsing"""
         logger.info(f"Fetching {batch_size} unparsed leads (country: {country or 'all'})...")
         
-        # Simple query using indexed fields - should be fast with the index
+        # Simple query using indexed fields
         query = self.supabase.table('contacts_grid_view').select('id, scrap_data')
         
         # Filter for unparsed records - index makes this fast
@@ -144,7 +144,7 @@ class ScrapDataParser:
             logger.error(f"Lead {lead_id}: Failed to update - {e}")
             return False
     
-    def process_batch(self, batch_size: int = 1000, country: Optional[str] = None) -> Dict:
+    def process_batch(self, batch_size: int = 100, country: Optional[str] = None) -> Dict:
         """Process a batch of leads"""
         start_time = datetime.now()
         
@@ -244,9 +244,9 @@ def main():
         # Initialize parser
         parser = ScrapDataParser(supabase)
         
-        # Process batch - with index, can query directly by parsing_completed = FALSE
-        # No need for ID tracking anymore!
-        result = parser.process_batch(batch_size=1000)
+        # Process batch - use smaller batch size for Render to avoid timeout
+        # Even with index, Render has stricter timeout limits
+        result = parser.process_batch(batch_size=100)
         
         if "error" in result:
             logger.error(f"Batch processing failed: {result['error']}")
