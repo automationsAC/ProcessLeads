@@ -170,19 +170,26 @@ class AirtableClient:
         if not property_name:
             return []
             
-        url = f"https://api.airtable.com/v0/{self.base_id}/Properties"
-        params = {
-            "filterByFormula": f"SEARCH('{property_name}', {{Name}})",
-            "maxRecords": 20
-        }
-        
+        # Try to search - if it fails, just skip Airtable checking
         try:
+            # Escape single quotes in property name for Airtable formula
+            safe_name = property_name.replace("'", "\\'")
+            
+            url = f"https://api.airtable.com/v0/{self.base_id}/Properties%20v2"
+            params = {
+                "filterByFormula": f"SEARCH(LOWER('{safe_name}'), LOWER({{Property Name}}))",
+                "maxRecords": 20
+            }
+            
             response = self.session.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             return data.get("records", [])
         except Exception as e:
-            logger.error(f"Error searching Airtable for {property_name}: {e}")
+            # Log once but don't spam - Airtable checking is optional
+            if not hasattr(self, '_airtable_error_logged'):
+                logger.warning(f"Airtable checking disabled due to error: {e}")
+                self._airtable_error_logged = True
             return []
 
 class HubSpotDuplicateChecker:
@@ -218,28 +225,34 @@ class HubSpotDuplicateChecker:
             return None
         return None
     
-    def fetch_leads_batch(self, batch_size: int = 100) -> List[Dict]:
+    def fetch_leads_batch(self, batch_size: int = 100, start_id: int = None) -> List[Dict]:
         """Fetch leads ready for HubSpot duplicate checking"""
-        logger.info(f"Fetching {batch_size} leads for HubSpot duplicate checking...")
+        logger.info(f"Fetching {batch_size} leads for HubSpot duplicate checking (start_id: {start_id})...")
         
-        query = self.supabase.table('contacts_grid_view').select('*')
+        # Use direct SQL via RPC or a simpler approach - fetch by ID and filter client-side
+        query = self.supabase.table('contacts_grid_view').select('id, email, phone, first_name, last_name, company, property_name, address_city_from_lead, country, zerobounce_status, hubspot_duplicate_check_2')
         
-        # Apply filters
-        query = query.eq('zerobounce_status', 'valid')
-        query = query.eq('zerobounce_processed', False)
-        query = query.not_.is_('email', 'null')
-        query = query.neq('email', '')
+        # Only filter by ID range if provided
+        if start_id:
+            query = query.gte('id', start_id)
         
-        # Order by created_at
-        query = query.order('created_at', desc=False)
-        
-        # Limit batch size
-        query = query.limit(batch_size)
+        # Order by ID and limit
+        query = query.order('id', desc=False)
+        query = query.limit(batch_size * 10)  # Fetch more to compensate for filtering
         
         try:
             result = query.execute()
-            leads = result.data
-            logger.info(f"Fetched {len(leads)} leads for HubSpot duplicate checking")
+            all_leads = result.data
+            
+            # Filter in Python for leads that match our criteria
+            leads = [
+                lead for lead in all_leads 
+                if lead.get('zerobounce_status') == 'valid' 
+                and lead.get('hubspot_duplicate_check_2') is None
+                and lead.get('email')
+            ][:batch_size]
+            
+            logger.info(f"Fetched {len(leads)} leads for HubSpot duplicate checking (from {len(all_leads)} total)")
             return leads
         except Exception as e:
             logger.error(f"Failed to fetch leads: {e}")
@@ -378,7 +391,7 @@ class HubSpotDuplicateChecker:
                 return {
                     'found': True,
                     'match_id': best_match.get('id'),
-                    'match_name': fields.get('Name', ''),
+                    'match_name': fields.get('Property Name', ''),
                     'score': best_score
                 }
         
@@ -421,8 +434,7 @@ class HubSpotDuplicateChecker:
             'hubspot_duplicate_check_2': status,
             'hubspot_checked_at_2': datetime.now().isoformat(),
             'needs_hubspot_deal': needs_deal,
-            'deal_creation_reason': reason,
-            'zerobounce_processed': True
+            'deal_creation_reason': reason
         }
         
         # Add contact details if found
@@ -456,12 +468,12 @@ class HubSpotDuplicateChecker:
         
         return update_data
     
-    def process_batch(self, batch_size: int = 100) -> Dict:
+    def process_batch(self, batch_size: int = 100, start_id: int = None) -> Dict:
         """Process a batch of leads for HubSpot duplicate checking"""
-        logger.info(f"Starting HubSpot duplicate check batch (size: {batch_size})")
+        logger.info(f"Starting HubSpot duplicate check batch (size: {batch_size}, start_id: {start_id})")
         
         # Fetch leads
-        leads = self.fetch_leads_batch(batch_size)
+        leads = self.fetch_leads_batch(batch_size, start_id)
         if not leads:
             return {"error": "No leads found to process"}
         
