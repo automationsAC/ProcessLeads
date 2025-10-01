@@ -92,7 +92,7 @@ class ZeroBounceValidator:
         logger.info(f"Fetching {batch_size} leads for validation (country: {country_priority or 'all'})...")
         
         # Use lightweight query to avoid timeout
-        query = self.supabase.table('contacts_grid_view').select('id, email, country, zerobounce_status, humanfit, added_to_instantly')
+        query = self.supabase.table('contacts_grid_view').select('id, email, country, zerobounce_status, humanfit, added_to_validation')
         
         # Add country filter if specified
         if country_priority:
@@ -110,13 +110,13 @@ class ZeroBounceValidator:
             # 1. Has email
             # 2. Not yet validated by ZeroBounce
             # 3. NOT humanfit = false (exclude false, allow true and null)
-            # 4. NOT (added_to_instantly = true AND humanfit = null)
+            # 4. NOT (added_to_validation = true AND humanfit = null)
             leads = [
                 lead for lead in all_leads
                 if lead.get('email')  # Has email
                 and not lead.get('zerobounce_status')  # Not yet validated
                 and lead.get('humanfit') != False  # Exclude humanfit = false
-                and not (lead.get('added_to_instantly') == True and lead.get('humanfit') is None)  # Exclude added_to_instantly=true + humanfit=null
+                and not (lead.get('added_to_validation') == True and lead.get('humanfit') is None)  # Exclude added_to_validation=true + humanfit=null
             ][:batch_size]
             
             logger.info(f"Fetched {len(leads)} leads for validation (from {len(all_leads)} total, filtered by humanfit rules)")
