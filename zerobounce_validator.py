@@ -89,31 +89,37 @@ class ZeroBounceValidator:
     
     def fetch_leads_batch(self, batch_size: int = 100, country_priority: str = None) -> List[Dict]:
         """Fetch a batch of leads ready for validation"""
-        logger.info(f"Fetching {batch_size} leads for validation...")
+        logger.info(f"Fetching {batch_size} leads for validation (country: {country_priority or 'all'})...")
         
-        query = self.supabase.table('contacts_grid_view').select('*')
-        
-        # Apply filters
-        query = query.eq('humanfit', True)
-        query = query.is_('added_to_instantly', 'null')
-        query = query.not_.is_('email', 'null')
-        query = query.neq('email', '')
+        # Use lightweight query to avoid timeout
+        query = self.supabase.table('contacts_grid_view').select('id, email, country, zerobounce_status, humanfit, added_to_instantly')
         
         # Add country filter if specified
         if country_priority:
             query = query.eq('country', country_priority)
-            
-        # Order by country priority and created_at
-        query = query.order('country', desc=False)
-        query = query.order('created_at', desc=False)
         
-        # Limit batch size
-        query = query.limit(batch_size)
+        # Order by ID for consistent batching
+        query = query.order('id', desc=False)
+        query = query.limit(batch_size * 10)  # Fetch more to filter client-side
         
         try:
             result = query.execute()
-            leads = result.data
-            logger.info(f"Fetched {len(leads)} leads for validation")
+            all_leads = result.data
+            
+            # Filter client-side for leads that match all criteria:
+            # 1. Has email
+            # 2. Not yet validated by ZeroBounce
+            # 3. NOT humanfit = false (exclude false, allow true and null)
+            # 4. NOT (added_to_instantly = true AND humanfit = null)
+            leads = [
+                lead for lead in all_leads
+                if lead.get('email')  # Has email
+                and not lead.get('zerobounce_status')  # Not yet validated
+                and lead.get('humanfit') != False  # Exclude humanfit = false
+                and not (lead.get('added_to_instantly') == True and lead.get('humanfit') is None)  # Exclude added_to_instantly=true + humanfit=null
+            ][:batch_size]
+            
+            logger.info(f"Fetched {len(leads)} leads for validation (from {len(all_leads)} total, filtered by humanfit rules)")
             return leads
         except Exception as e:
             logger.error(f"Failed to fetch leads: {e}")
